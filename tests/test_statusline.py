@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 # Import statusline module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline
+import statusline as sl
 
 class TestStatusline(unittest.TestCase):
 
@@ -208,6 +209,64 @@ class TestInstaller(unittest.TestCase):
         self.assertEqual(data["permissions"]["allow"], ["command(*)", "mcp(*)"])
         self.assertEqual(data["trustedWorkspaces"], ["/somewhere"])
         self.assertEqual(data["statusLine"]["type"], "command")
+
+
+class TestQuotaFreshness(unittest.TestCase):
+    """The 5h reading stayed pinned because refreshes could never survive."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_background_sync_is_detached_from_the_caller(self):
+        """
+        `agy -p /usage` needs seconds; the statusline returns in milliseconds. Without
+        start_new_session the child stayed in the caller's process group and was killed
+        by the group teardown 2-3s in, so the sync never once completed.
+        """
+        src = open(os.path.join(os.path.dirname(__file__), "..", "statusline.py")).read()
+        popen_call = src.split("subprocess.Popen(", 1)[1].split(")", 1)[0]
+        self.assertIn("start_new_session=True", popen_call)
+
+    def test_nested_render_does_not_write_the_cache(self):
+        """A render triggered by our own quota fetch must not overwrite that fetch."""
+        cache = os.path.join(self.tmp, "cache.json")
+        with open(cache, "w") as f:
+            json.dump({"quota": {"gemini-5h": {"remaining_fraction": 0.83,
+                                               "reset_time": "2099-01-01T00:00:00Z"}}}, f)
+        env = dict(os.environ, STATUSLINE_CACHE_PATH=cache, STATUSLINE_NO_RECURSE="1")
+        payload = json.dumps({"quota": {"gemini-5h": {"remaining_fraction": 0.01,
+                                                      "reset_time": "2020-01-01T00:00:00Z"}}})
+        subprocess.run([sys.executable,
+                        os.path.join(os.path.dirname(__file__), "..", "statusline.py")],
+                       input=payload, capture_output=True, text=True, env=env)
+        with open(cache) as f:
+            self.assertEqual(json.load(f)["quota"]["gemini-5h"]["remaining_fraction"], 0.83)
+
+    def test_stale_payload_does_not_overwrite_fresher_cache(self):
+        """A long-lived agy session pipes the quota it read at startup, forever."""
+        fresh = {"remaining_fraction": 0.83, "reset_time": "2099-01-01T00:00:00Z"}
+        stale = {"remaining_fraction": 0.01, "reset_time": "2020-01-01T00:00:00Z"}
+        merged = sl.merge_quota({"gemini-5h": stale}, {"gemini-5h": fresh})
+        self.assertEqual(merged["gemini-5h"], fresh)
+        # ... and a genuinely newer reading still wins.
+        merged = sl.merge_quota({"gemini-5h": fresh}, {"gemini-5h": stale})
+        self.assertEqual(merged["gemini-5h"], fresh)
+        # A bucket the cache has never seen is always adopted.
+        self.assertEqual(sl.merge_quota({"new": stale}, {})["new"], stale)
+
+    def test_elapsed_reset_does_not_fabricate_full_quota(self):
+        """
+        An elapsed timestamp means the reading is out of date, not that the bucket
+        refilled. Reporting 100% invented a number that stuck for as long as the
+        refresh kept failing -- which, given the process-group kill, was always.
+        """
+        out = sl.render_statusline({"quota": {"gemini-5h": {
+            "remaining_fraction": 0.58, "reset_time": "2020-01-01T00:00:00Z"}}},
+            term_width=200)
+        plain = sl.strip_ansi(out)
+        self.assertIn("58%", plain)
+        self.assertIn("syncing", plain)
+        self.assertNotIn("100%", plain)
 
 
 if __name__ == "__main__":

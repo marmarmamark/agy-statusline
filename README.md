@@ -43,7 +43,8 @@ is missing, rather than installing a statusline that quietly never appears.
 
 ## Key Features
 
-- **⚡ Zero UI Lag:** Runs asynchronously; when reset timestamps elapse, a detached background process synchronizes fresh quota from Google's backend without blocking the CLI.
+- **⚡ Zero UI Lag:** Runs asynchronously; when reset timestamps elapse, a background process detached into its own session (so it outlives the millisecond-long statusline render that spawned it) synchronizes fresh quota from Google's backend without blocking the CLI.
+- **🔁 Freshest Reading Wins:** Quota is merged per bucket by reset timestamp, so a long-lived `agy` session piping the figures it read at startup cannot overwrite a newer sync. A reading whose window has rolled over is shown as the last measured value marked `(syncing)` rather than being reported as a full 100%.
 - **🎨 Color-Coded Health Indicators:** Automatically shifts colors based on usage:
   - 🟢 **Green (>= 50%):** Healthy quota capacity.
   - 🟡 **Yellow (20% - 49%):** Approaching limits.

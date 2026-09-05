@@ -170,7 +170,13 @@ except Exception:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
-            close_fds=True
+            close_fds=True,
+            # `agy -p /usage` needs ~4s, and the statusline that spawned it returns
+            # in milliseconds. Closing fds is not detaching: the child stayed in the
+            # caller's process group, so the group teardown that follows the
+            # statusline command killed it 2-3s in -- every time, silently. It has
+            # to outlive its parent to be a background sync at all.
+            start_new_session=True,
         )
     except Exception:
         pass
@@ -223,17 +229,28 @@ def render_statusline(data, term_width=80):
         if secs is not None and secs <= 0 and reset_time:
             reset_elapsed = True
 
+        syncing = False
         if reset_elapsed and (rem_frac is None or rem_frac < 0.95):
-            pct = 100
+            # An elapsed timestamp means this reading is out of date. It is not
+            # evidence that the bucket refilled, and reporting 100% here invented
+            # a number -- one that stuck at 100% for as long as the refresh failed
+            # to land. Show the last figure actually measured, marked as stale.
+            syncing = True
+            pct = max(0, min(100, int(round(rem_frac * 100)))) if rem_frac is not None else None
             cd = None
             trigger_background_quota_sync()
         else:
             pct = max(0, min(100, int(round(rem_frac * 100)))) if rem_frac is not None else 100
             cd = format_countdown(seconds=secs, iso_str=reset_time)
 
-        token = f"5h: {format_percentage(pct)} left"
-        if pct < 100 and cd and cd != "resets soon":
-            token += f" ({colorize(cd, '90')})"
+        if pct is None:
+            token = "5h: " + colorize("syncing", "90")
+        else:
+            token = f"5h: {format_percentage(pct)} left"
+            if pct < 100 and cd and cd != "resets soon":
+                token += f" ({colorize(cd, '90')})"
+            if syncing:
+                token += " " + colorize("(syncing)", "90")
         quota_tokens.append(token)
 
     if isinstance(g_wk, dict):
@@ -285,6 +302,53 @@ def render_statusline(data, term_width=80):
 
     return full_str
 
+def is_nested_render():
+    """
+    True when this render was triggered by our own `agy -p /usage` quota fetch.
+
+    agy renders its statusline on startup, including for a headless -p run, so
+    every quota sync spawned a nested render of this script. The flag was set by
+    all three callers and read by none, so the nested render wrote agy's payload
+    straight back over the cache the sync was about to refresh.
+    """
+    return os.environ.get("STATUSLINE_NO_RECURSE") == "1"
+
+def quota_is_fresher(candidate, incumbent):
+    """
+    True when `candidate` is a more current reading than `incumbent`.
+
+    Freshness is the reset timestamp: a bucket whose window has not yet rolled
+    over describes the window we are actually in. Without this a long-lived agy
+    session kept piping the quota it read at startup, which overwrote every
+    successful background refresh and pinned the display to a stale window.
+    """
+    def reset_of(bucket):
+        if not isinstance(bucket, dict):
+            return None
+        raw = bucket.get("reset_time")
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+        except Exception:
+            return None
+
+    new_reset, old_reset = reset_of(candidate), reset_of(incumbent)
+    if old_reset is None:
+        return new_reset is not None or isinstance(candidate, dict)
+    if new_reset is None:
+        return False
+    return new_reset > old_reset
+
+def merge_quota(incoming, cached):
+    """Keep the freshest reading per bucket rather than letting either side win wholesale."""
+    merged = dict(cached or {})
+    for bucket_id, bucket in (incoming or {}).items():
+        if bucket_id not in merged or quota_is_fresher(bucket, merged[bucket_id]):
+            merged[bucket_id] = bucket
+    return merged
+
 def main():
     cached_data = {}
     if os.path.exists(CACHE_FILE):
@@ -307,15 +371,19 @@ def main():
         pass
 
     if stdin_data:
-        if not stdin_data.get("quota") and cached_data.get("quota"):
-            stdin_data["quota"] = cached_data["quota"]
-        try:
-            tmp = CACHE_FILE + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(stdin_data, f)
-            os.replace(tmp, CACHE_FILE)
-        except Exception:
-            pass
+        merged_quota = merge_quota(stdin_data.get("quota"), cached_data.get("quota"))
+        if merged_quota:
+            stdin_data["quota"] = merged_quota
+        # A nested render is a side effect of our own quota fetch. Its payload is
+        # not newer than what the fetch is about to write, so it must not persist.
+        if not is_nested_render():
+            try:
+                tmp = CACHE_FILE + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(stdin_data, f)
+                os.replace(tmp, CACHE_FILE)
+            except Exception:
+                pass
     else:
         stdin_data = cached_data
 
