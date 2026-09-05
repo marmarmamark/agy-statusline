@@ -12,6 +12,21 @@ import statusline
 
 class TestStatusline(unittest.TestCase):
 
+    def setUp(self):
+        """
+        Pin every ambient dependency. get_classifier_remaining() reads the real
+        ~/.gemini/config/classifier_usage.json, so without this the rendering tests
+        pass or fail depending on the developer's live classifier usage.
+        """
+        self._saved_usage_file = statusline.CLASSIFIER_USAGE_FILE
+        self._saved_cache_file = statusline.CACHE_FILE
+        statusline.CLASSIFIER_USAGE_FILE = "/nonexistent/classifier_usage.json"
+        statusline.CACHE_FILE = "/nonexistent/agy_statusline_cache.json"
+
+    def tearDown(self):
+        statusline.CLASSIFIER_USAGE_FILE = self._saved_usage_file
+        statusline.CACHE_FILE = self._saved_cache_file
+
     def test_strip_ansi(self):
         colored = "\033[32m5h: 80% left\033[0m"
         self.assertEqual(statusline.strip_ansi(colored), "5h: 80% left")
@@ -121,6 +136,22 @@ class TestStatusline(unittest.TestCase):
         output = statusline.render_statusline({})
         plain = statusline.strip_ansi(output)
         self.assertIn("[Quota: syncing...]", plain)
+
+    def test_no_leading_divider_without_context_bar(self):
+        """Quota tokens alone must not render a dangling '│' with nothing to its left."""
+        statusline.CLASSIFIER_USAGE_FILE = self._saved_usage_file  # allow a real value
+        sample = {"quota": {"gemini-5h": {"remaining_fraction": 0.5, "reset_in_seconds": 3600}}}
+        plain = statusline.strip_ansi(statusline.render_statusline(sample, term_width=100))
+        self.assertFalse(plain.lstrip().startswith("│"), f"dangling divider: {plain!r}")
+        self.assertIn("5h: 50% left", plain)
+
+    def test_subprocess_is_importable_for_background_sync(self):
+        """
+        trigger_background_quota_sync() calls subprocess.Popen inside a bare
+        `except Exception: pass`. A missing import raised NameError there, silently
+        disabling every quota refresh after a reset.
+        """
+        self.assertTrue(hasattr(statusline, "subprocess"))
 
 if __name__ == "__main__":
     unittest.main()

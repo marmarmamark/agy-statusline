@@ -23,7 +23,19 @@ done
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="${HOME}/.gemini/config/scripts"
 TARGET_FILE="${TARGET_DIR}/statusline.py"
-SETTINGS_FILE="${HOME}/.gemini/config/settings.json"
+
+# agy reads its settings from ~/.gemini/antigravity-cli/settings.json. Writing to
+# ~/.gemini/config/settings.json created a file agy never loads, so the statusline
+# was installed but never appeared. Prefer the real location, and only fall back to
+# the legacy path if the antigravity-cli directory is genuinely absent.
+if [ -f "${HOME}/.gemini/antigravity-cli/settings.json" ] || [ -d "${HOME}/.gemini/antigravity-cli" ]; then
+  SETTINGS_FILE="${HOME}/.gemini/antigravity-cli/settings.json"
+elif [ -f "${HOME}/.gemini/config/settings.json" ]; then
+  SETTINGS_FILE="${HOME}/.gemini/config/settings.json"
+else
+  SETTINGS_FILE="${HOME}/.gemini/antigravity-cli/settings.json"
+fi
+echo "==> Using agy settings file: ${SETTINGS_FILE}"
 
 if [ "${UNINSTALL}" = true ]; then
   echo "==> Uninstalling agy-statusline..."

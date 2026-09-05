@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -252,8 +253,10 @@ def render_statusline(data, term_width=80):
         quota_tokens.append(f"Auto: {rem_str} left")
 
     if quota_tokens:
-        divider = colorize("│", "90")
-        parts.append(divider)
+        # The divider separates the context bar from the quota tokens, so it is only
+        # meaningful when there is something to its left
+        if parts:
+            parts.append(colorize("│", "90"))
         parts.append(" · ".join(quota_tokens))
 
     full_str = "  ".join(parts) if parts else colorize("[Quota: syncing...]", "90")
@@ -273,7 +276,8 @@ def render_statusline(data, term_width=80):
         if rem_ai is not None:
             c_tokens.append(f"Auto: {rem_str}")
         if c_tokens:
-            compact_parts.append(colorize("│", "90"))
+            if compact_parts:
+                compact_parts.append(colorize("│", "90"))
             compact_parts.append(" · ".join(c_tokens))
         full_str = "  ".join(compact_parts)
 
