@@ -158,7 +158,7 @@ echo "==> Successfully updated ${SETTINGS_FILE}"
 # it is handed, and writing these sample numbers to the real cache would leave
 # agy-auto-resume and gemini-worker reading a fabricated 85% quota.
 echo "==> Testing statusline execution with sample payload..."
-SELFTEST_CACHE="$(mktemp -t agy_statusline_selftest)"
+SELFTEST_CACHE="$(mktemp "${TMPDIR:-/tmp}/agy_statusline_selftest.XXXXXX")"
 TEST_PAYLOAD='{"context_window":{"used_percentage":28.0},"quota":{"gemini-5h":{"remaining_fraction":0.85,"reset_in_seconds":3600},"gemini-weekly":{"remaining_fraction":0.95}},"terminal_width":80}'
 OUTPUT=$(printf '%s' "${TEST_PAYLOAD}" | STATUSLINE_CACHE_PATH="${SELFTEST_CACHE}" python3 "${TARGET_FILE}")
 rm -f "${SELFTEST_CACHE}" "${SELFTEST_CACHE}.tmp"
