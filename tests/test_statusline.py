@@ -269,5 +269,69 @@ class TestQuotaFreshness(unittest.TestCase):
         self.assertNotIn("100%", plain)
 
 
+class TestLiveWindowFreshness(unittest.TestCase):
+    """The displayed figure has to be able to move while the window is still open."""
+
+    FUTURE = "2099-01-01T00:00:00Z"
+    LATER = "2099-06-01T00:00:00Z"
+
+    def _bucket(self, frac, reset=None):
+        return {"remaining_fraction": frac, "reset_time": reset or self.FUTURE}
+
+    def test_usage_accrual_is_accepted_within_one_window(self):
+        """
+        reset_time is pinned for the whole window, so comparing it alone made every
+        mid-window reading "not fresher" and froze the number at the window's first
+        value. Usage only accumulates, so a smaller fraction is the later reading.
+        """
+        merged = sl.merge_quota({"g": self._bucket(0.65)}, {"g": self._bucket(0.67)})
+        self.assertEqual(merged["g"]["remaining_fraction"], 0.65)
+
+    def test_stale_higher_reading_still_loses_within_one_window(self):
+        merged = sl.merge_quota({"g": self._bucket(0.67)}, {"g": self._bucket(0.65)})
+        self.assertEqual(merged["g"]["remaining_fraction"], 0.65)
+
+    def test_window_rollover_beats_the_fraction_rule(self):
+        """A refilled bucket has a higher fraction; the newer window must still win."""
+        merged = sl.merge_quota({"g": self._bucket(0.99, self.LATER)},
+                                {"g": self._bucket(0.10)})
+        self.assertEqual(merged["g"]["reset_time"], self.LATER)
+        merged = sl.merge_quota({"g": self._bucket(0.10)},
+                                {"g": self._bucket(0.99, self.LATER)})
+        self.assertEqual(merged["g"]["reset_time"], self.LATER)
+
+    def test_live_window_requests_a_refresh(self):
+        """A sync used to be requested only after the window had already expired."""
+        calls = []
+        original = sl.trigger_background_quota_sync
+        sl.trigger_background_quota_sync = lambda *a, **k: calls.append(a[0] if a else None)
+        try:
+            sl.render_statusline({"quota": {"gemini-5h": {
+                "remaining_fraction": 0.83, "reset_time": self.FUTURE,
+                "reset_in_seconds": 9000}}}, term_width=200)
+            self.assertEqual(calls, [sl.SYNC_INTERVAL_SECS])
+
+            calls.clear()
+            sl.render_statusline({"quota": {"gemini-5h": {
+                "remaining_fraction": 0.08, "reset_time": self.FUTURE,
+                "reset_in_seconds": 9000}}}, term_width=200)
+            self.assertEqual(calls, [sl.SYNC_INTERVAL_URGENT_SECS],
+                             "near exhaustion the figure should be re-measured sooner")
+        finally:
+            sl.trigger_background_quota_sync = original
+
+    def test_nested_render_never_spawns_a_sync(self):
+        """A nested render belongs to a sync already in flight."""
+        cooldown = "/tmp/agy_quota_sync_cooldown"
+        if os.path.exists(cooldown):
+            os.remove(cooldown)
+        os.environ["STATUSLINE_NO_RECURSE"] = "1"
+        try:
+            sl.trigger_background_quota_sync(20)
+            self.assertFalse(os.path.exists(cooldown))
+        finally:
+            os.environ.pop("STATUSLINE_NO_RECURSE", None)
+
+
 if __name__ == "__main__":
     unittest.main()

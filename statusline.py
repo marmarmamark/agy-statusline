@@ -99,15 +99,30 @@ def find_agy_binary():
             return c
     return "agy"
 
-def trigger_background_quota_sync():
+# How often a live window may be re-measured. agy re-invokes this script about once
+# a second, but the only source of truth is `agy -p /usage`, which costs ~3.7s of
+# wall clock (and no model quota), so the displayed percentage cannot tick per
+# second no matter what. This is the granularity knob: lower is fresher and spends
+# more background processes.
+SYNC_INTERVAL_SECS = int(os.environ.get("AGY_STATUSLINE_SYNC_SECS") or 20)
+# Near exhaustion the exact number is what the user is actually watching.
+SYNC_INTERVAL_URGENT_SECS = max(10, SYNC_INTERVAL_SECS // 2)
+LOW_QUOTA_FRACTION = 0.15
+
+def trigger_background_quota_sync(min_interval=SYNC_INTERVAL_SECS):
     """Trigger an asynchronous, non-blocking background fetch of fresh quota from agy."""
+    # A nested render belongs to a sync that is already in flight; letting it start
+    # another would be recursive. The cooldown usually absorbs this, but only by
+    # accident of timing.
+    if is_nested_render():
+        return
     cooldown_file = "/tmp/agy_quota_sync_cooldown"
     now = time.time()
     if os.path.exists(cooldown_file):
         try:
             with open(cooldown_file, "r") as f:
                 last_time = float(f.read().strip())
-                if now - last_time < 60:
+                if now - last_time < min_interval:
                     return
         except Exception:
             pass
@@ -124,7 +139,7 @@ def trigger_background_quota_sync():
     env["STATUSLINE_CACHE_PATH"] = CACHE_FILE
 
     bg_script = """
-import json, subprocess, os
+import json, subprocess, os, time
 try:
     agy_bin = os.environ.get("AGY_BIN_PATH", "agy")
     cache_file = os.environ.get("STATUSLINE_CACHE_PATH", "/tmp/agy_statusline_cache.json")
@@ -147,6 +162,11 @@ try:
                         "remaining_fraction": b.get("remaining_fraction"),
                         "reset_in_seconds": b.get("reset_in_seconds"),
                         "reset_time": b.get("reset_time"),
+                        # The statusline rewrites this file about once a second, so
+                        # the file's mtime says nothing about how old the quota in
+                        # it is. Readers need the measurement time, not the write
+                        # time, to judge staleness.
+                        "fetched_at": time.time(),
                     }
         cdata = {}
         if os.path.exists(cache_file):
@@ -238,10 +258,18 @@ def render_statusline(data, term_width=80):
             syncing = True
             pct = max(0, min(100, int(round(rem_frac * 100)))) if rem_frac is not None else None
             cd = None
-            trigger_background_quota_sync()
+            trigger_background_quota_sync(SYNC_INTERVAL_URGENT_SECS)
         else:
             pct = max(0, min(100, int(round(rem_frac * 100)))) if rem_frac is not None else 100
             cd = format_countdown(seconds=secs, iso_str=reset_time)
+            # The live window was never refreshed at all: a sync was only requested
+            # once the window had already expired, so a figure could age for the
+            # entire five hours. agy's own payload carries a snapshot it updates
+            # every few minutes, which is not often enough to watch.
+            trigger_background_quota_sync(
+                SYNC_INTERVAL_URGENT_SECS
+                if (rem_frac is not None and rem_frac <= LOW_QUOTA_FRACTION)
+                else SYNC_INTERVAL_SECS)
 
         if pct is None:
             token = "5h: " + colorize("syncing", "90")
@@ -334,12 +362,31 @@ def quota_is_fresher(candidate, incumbent):
         except Exception:
             return None
 
+    def fraction_of(bucket):
+        if not isinstance(bucket, dict):
+            return None
+        value = bucket.get("remaining_fraction")
+        return value if isinstance(value, (int, float)) else None
+
     new_reset, old_reset = reset_of(candidate), reset_of(incumbent)
     if old_reset is None:
         return new_reset is not None or isinstance(candidate, dict)
     if new_reset is None:
         return False
-    return new_reset > old_reset
+    if new_reset != old_reset:
+        return new_reset > old_reset
+
+    # Same window. Comparing reset_time alone made this branch always False, which
+    # pinned remaining_fraction to the first reading of the window -- the number
+    # could then only move when the window rolled over, up to five hours later.
+    # Within one window usage only accumulates, so the smaller remaining fraction
+    # is by definition the later observation.
+    new_frac, old_frac = fraction_of(candidate), fraction_of(incumbent)
+    if new_frac is None:
+        return False
+    if old_frac is None:
+        return True
+    return new_frac < old_frac
 
 def merge_quota(incoming, cached):
     """Keep the freshest reading per bucket rather than letting either side win wholesale."""
@@ -371,7 +418,20 @@ def main():
         pass
 
     if stdin_data:
-        merged_quota = merge_quota(stdin_data.get("quota"), cached_data.get("quota"))
+        # Re-read right before writing rather than trusting the snapshot taken at
+        # startup. A background sync can land during the render, and writing the
+        # older snapshot would silently roll it back. agy also renders a statusline
+        # inside `agy -p /usage` without propagating STATUSLINE_NO_RECURSE to it, so
+        # that nested render is exactly such a stale writer -- it cannot be excluded
+        # by the environment guard, only out-raced by re-reading.
+        latest_quota = cached_data.get("quota")
+        if os.path.exists(CACHE_FILE):
+            try:
+                with open(CACHE_FILE, "r") as f:
+                    latest_quota = merge_quota(json.load(f).get("quota"), latest_quota)
+            except Exception:
+                pass
+        merged_quota = merge_quota(stdin_data.get("quota"), latest_quota)
         if merged_quota:
             stdin_data["quota"] = merged_quota
         # A nested render is a side effect of our own quota fetch. Its payload is
