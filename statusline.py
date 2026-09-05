@@ -18,7 +18,9 @@ import sys
 import time
 from datetime import datetime, timezone
 
-CACHE_FILE = "/tmp/agy_statusline_cache.json"
+# Overridable so a self-test or a harness can render a sample payload without
+# writing it over the real quota cache that agy-auto-resume and gemini-worker read.
+CACHE_FILE = os.environ.get("STATUSLINE_CACHE_PATH") or "/tmp/agy_statusline_cache.json"
 CLASSIFIER_USAGE_FILE = os.path.expanduser("~/.gemini/config/classifier_usage.json")
 DEFAULT_CLASSIFIER_LIMIT = 1500
 
