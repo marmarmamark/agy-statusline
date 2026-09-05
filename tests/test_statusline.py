@@ -87,6 +87,36 @@ class TestStatusline(unittest.TestCase):
         self.assertIn("5h: 60%", plain)
         self.assertIn("Wk: 85%", plain)
 
+    def test_format_countdown_naive_iso_str(self):
+        # Naive datetime string without timezone must not crash with TypeError
+        naive_str = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1, minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        res = statusline.format_countdown(iso_str=naive_str)
+        self.assertTrue("h" in res or "m" in res or res == "resets soon")
+
+    def test_render_statusline_tokens_fallback(self):
+        sample = {
+            "context_window": {"used_tokens": 25000, "total_tokens": 100000},
+            "quota": {"gemini-5h": {"remaining_fraction": 0.90}}
+        }
+        output = statusline.render_statusline(sample, term_width=100)
+        plain = statusline.strip_ansi(output)
+        self.assertIn("25%", plain)
+        self.assertIn("5h: 90% left", plain)
+
+    def test_render_statusline_naive_reset_time(self):
+        naive_rt = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        sample = {
+            "quota": {
+                "gemini-5h": {
+                    "remaining_fraction": 0.50,
+                    "reset_time": naive_rt
+                }
+            }
+        }
+        output = statusline.render_statusline(sample, term_width=100)
+        plain = statusline.strip_ansi(output)
+        self.assertIn("5h: 50% left", plain)
+
     def test_render_statusline_empty_data(self):
         output = statusline.render_statusline({})
         plain = statusline.strip_ansi(output)

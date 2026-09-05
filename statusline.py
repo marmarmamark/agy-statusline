@@ -42,6 +42,8 @@ def format_countdown(seconds=None, iso_str=None):
     if seconds is None and iso_str:
         try:
             rt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+            if rt.tzinfo is None:
+                rt = rt.replace(tzinfo=timezone.utc)
             seconds = (rt - datetime.now(timezone.utc)).total_seconds()
         except Exception:
             seconds = None
@@ -131,7 +133,8 @@ try:
     )
     if res.returncode == 0:
         data = json.loads(res.stdout)
-        buckets = data.get("command", {}).get("data", {}).get("groups", [])
+        cmd_data = data.get("command", {}).get("data", {})
+        buckets = cmd_data.get("groups") or data.get("data", {}).get("groups") or data.get("groups", [])
         new_quota = {}
         for g in buckets:
             for b in g.get("buckets", []):
@@ -139,15 +142,22 @@ try:
                 if bid:
                     new_quota[bid] = {
                         "remaining_fraction": b.get("remaining_fraction"),
+                        "reset_in_seconds": b.get("reset_in_seconds"),
                         "reset_time": b.get("reset_time"),
                     }
+        cdata = {}
         if os.path.exists(cache_file):
-            with open(cache_file, "r") as f:
-                cdata = json.load(f)
-            cdata.setdefault("quota", {})
-            cdata["quota"].update(new_quota)
-            with open(cache_file, "w") as f:
-                json.dump(cdata, f)
+            try:
+                with open(cache_file, "r") as f:
+                    cdata = json.load(f)
+            except Exception:
+                cdata = {}
+        cdata.setdefault("quota", {})
+        cdata["quota"].update(new_quota)
+        tmp = cache_file + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cdata, f)
+        os.replace(tmp, cache_file)
 except Exception:
     pass
 """
@@ -169,6 +179,14 @@ def render_statusline(data, term_width=80):
     # 1. Context Window Usage Bar (Claude Code style)
     ctx = data.get("context_window", {})
     used_pct = ctx.get("used_percentage")
+    if used_pct is None:
+        used_tokens = ctx.get("used_tokens") or ctx.get("tokens") or ctx.get("current_usage")
+        total_tokens = ctx.get("total_tokens") or ctx.get("max_tokens") or ctx.get("capacity")
+        if used_tokens is not None and total_tokens:
+            try:
+                used_pct = (float(used_tokens) / float(total_tokens)) * 100
+            except Exception:
+                pass
     if used_pct is not None:
         bar_width = 10
         filled = max(0, min(bar_width, int(round((used_pct / 100) * bar_width))))
@@ -193,6 +211,8 @@ def render_statusline(data, term_width=80):
         if reset_time:
             try:
                 rt = datetime.fromisoformat(reset_time.replace("Z", "+00:00"))
+                if rt.tzinfo is None:
+                    rt = rt.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) >= rt:
                     reset_elapsed = True
             except Exception:
@@ -284,8 +304,10 @@ def main():
         if not stdin_data.get("quota") and cached_data.get("quota"):
             stdin_data["quota"] = cached_data["quota"]
         try:
-            with open(CACHE_FILE, "w") as f:
+            tmp = CACHE_FILE + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(stdin_data, f)
+            os.replace(tmp, CACHE_FILE)
         except Exception:
             pass
     else:
