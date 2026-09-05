@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Unit tests for agy-statusline rendering and formatting."""
 
+import json
+import subprocess
+import tempfile
 import unittest
 import sys
 import os
@@ -152,6 +155,60 @@ class TestStatusline(unittest.TestCase):
         disabling every quota refresh after a reset.
         """
         self.assertTrue(hasattr(statusline, "subprocess"))
+
+class TestInstaller(unittest.TestCase):
+    """Runs the real install.sh against a throwaway HOME."""
+
+    REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_install_sh_is_valid_bash(self):
+        res = subprocess.run(["bash", "-n", os.path.join(self.REPO, "install.sh")],
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def _run_installer(self, existing_settings=None):
+        home = tempfile.mkdtemp()
+        settings = os.path.join(home, ".gemini", "antigravity-cli", "settings.json")
+        os.makedirs(os.path.dirname(settings))
+        if existing_settings is not None:
+            with open(settings, "w") as f:
+                json.dump(existing_settings, f)
+        env = dict(os.environ, HOME=home)
+        res = subprocess.run(["bash", os.path.join(self.REPO, "install.sh")],
+                             capture_output=True, text=True, env=env, cwd=self.REPO)
+        return home, settings, res
+
+    def test_installer_writes_the_settings_file_agy_reads(self):
+        """
+        It used to write ~/.gemini/config/settings.json, which agy never loads, so the
+        statusline installed and then never appeared.
+        """
+        home, settings, res = self._run_installer(existing_settings={})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(os.path.exists(settings), "did not write antigravity-cli/settings.json")
+        with open(settings) as f:
+            data = json.load(f)
+        self.assertEqual(data["statusLine"]["type"], "command")
+        self.assertIn("statusline.py", data["statusLine"]["command"])
+
+    def test_installer_preserves_unrelated_settings_and_extra_keys(self):
+        """
+        The statusLine block was assigned wholesale, silently dropping keys the user
+        had set (stack_with_default), and permissions must never be disturbed.
+        """
+        home, settings, res = self._run_installer(existing_settings={
+            "permissions": {"allow": ["command(*)", "mcp(*)"]},
+            "statusLine": {"type": "", "command": "python3 /old.py", "stack_with_default": True},
+            "trustedWorkspaces": ["/somewhere"],
+        })
+        self.assertEqual(res.returncode, 0, res.stderr)
+        with open(settings) as f:
+            data = json.load(f)
+        self.assertEqual(data["statusLine"].get("stack_with_default"), True)
+        self.assertEqual(data["permissions"]["allow"], ["command(*)", "mcp(*)"])
+        self.assertEqual(data["trustedWorkspaces"], ["/somewhere"])
+        self.assertEqual(data["statusLine"]["type"], "command")
+
 
 if __name__ == "__main__":
     unittest.main()

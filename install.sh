@@ -91,13 +91,22 @@ if os.path.exists(settings_path):
     except Exception:
         data = {}
 
-data["statusLine"] = {
-    "type": "command",
-    "command": f"python3 {script_path}"
-}
+# Merge, do not replace: users set extra statusLine keys (e.g. stack_with_default)
+# and a wholesale assignment silently drops them.
+status_line = data.get("statusLine")
+if not isinstance(status_line, dict):
+    status_line = {}
+status_line["type"] = "command"
+status_line["command"] = f"python3 {script_path}"
+data["statusLine"] = status_line
 
-with open(settings_path, "w") as f:
+# Atomic write: settings.json also carries permissions, so a partial write on
+# interruption would be worse than no write at all.
+tmp = settings_path + ".tmp"
+with open(tmp, "w") as f:
     json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, settings_path)
 '
 
 echo "==> Successfully updated ${SETTINGS_FILE}"
