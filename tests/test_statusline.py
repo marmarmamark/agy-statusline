@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Unit tests for agy-statusline rendering and formatting."""
+
+import unittest
+import sys
+import os
+from datetime import datetime, timezone, timedelta
+
+# Import statusline module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import statusline
+
+class TestStatusline(unittest.TestCase):
+
+    def test_strip_ansi(self):
+        colored = "\033[32m5h: 80% left\033[0m"
+        self.assertEqual(statusline.strip_ansi(colored), "5h: 80% left")
+
+    def test_format_percentage_thresholds(self):
+        # Green >= 50
+        self.assertIn("\033[32m75%\033[0m", statusline.format_percentage(75))
+        # Yellow >= 20 and < 50
+        self.assertIn("\033[33m35%\033[0m", statusline.format_percentage(35))
+        # Red < 20
+        self.assertIn("\033[1;31m10%\033[0m", statusline.format_percentage(10))
+
+    def test_format_countdown_seconds(self):
+        # Hours and minutes
+        self.assertEqual(statusline.format_countdown(seconds=7260), "2h 1m")
+        # Minutes only
+        self.assertEqual(statusline.format_countdown(seconds=1800), "30m")
+        # Days
+        self.assertEqual(statusline.format_countdown(seconds=100000), "1d 3h")
+        # Resets soon
+        self.assertEqual(statusline.format_countdown(seconds=0), "resets soon")
+        self.assertEqual(statusline.format_countdown(seconds=-10), "resets soon")
+
+    def test_format_countdown_iso_str(self):
+        future = datetime.now(timezone.utc) + timedelta(hours=3, minutes=15)
+        iso = future.isoformat()
+        res = statusline.format_countdown(iso_str=iso)
+        self.assertIn("h", res)
+        self.assertIn("m", res)
+
+    def test_render_statusline_full(self):
+        sample_data = {
+            "context_window": {"used_percentage": 35.0},
+            "quota": {
+                "gemini-5h": {
+                    "remaining_fraction": 0.82,
+                    "reset_in_seconds": 7200,
+                    "reset_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+                },
+                "gemini-weekly": {
+                    "remaining_fraction": 0.95
+                }
+            },
+            "terminal_width": 120
+        }
+        output = statusline.render_statusline(sample_data, term_width=120)
+        plain = statusline.strip_ansi(output)
+
+        self.assertIn("35%", plain)
+        self.assertIn("5h: 82% left", plain)
+        self.assertIn("Week: 95% left", plain)
+        self.assertIn("│", plain)
+
+    def test_render_statusline_narrow_terminal_collapse(self):
+        sample_data = {
+            "context_window": {"used_percentage": 42.0},
+            "quota": {
+                "gemini-5h": {
+                    "remaining_fraction": 0.60,
+                    "reset_in_seconds": 3600,
+                },
+                "gemini-weekly": {
+                    "remaining_fraction": 0.85
+                }
+            },
+            "terminal_width": 40
+        }
+        # Width 35 forces compact layout
+        output = statusline.render_statusline(sample_data, term_width=35)
+        plain = statusline.strip_ansi(output)
+
+        self.assertIn("Ctx: 42%", plain)
+        self.assertIn("5h: 60%", plain)
+        self.assertIn("Wk: 85%", plain)
+
+    def test_render_statusline_empty_data(self):
+        output = statusline.render_statusline({})
+        plain = statusline.strip_ansi(output)
+        self.assertIn("[Quota: syncing...]", plain)
+
+if __name__ == "__main__":
+    unittest.main()
