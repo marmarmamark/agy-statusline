@@ -69,6 +69,49 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# The statusline is rendered by agy itself, and its quota segments are read from
+# `agy -p /usage`. Without agy nothing ever invokes this script.
+ANTIGRAVITY_URL="https://antigravity.google/"
+AUTO_MODE_URL="https://github.com/marmarmamark/agy-auto-mode"
+
+agy_installed() {
+  command -v agy >/dev/null 2>&1 && return 0
+  for c in "${HOME}/.local/bin/agy" \
+           "${HOME}/.antigravity-ide/antigravity-ide/bin/agy" \
+           "/usr/local/bin/agy" \
+           "/opt/homebrew/bin/agy"; do
+    [ -x "${c}" ] && return 0
+  done
+  return 1
+}
+
+if agy_installed; then
+  echo "==> Detected Antigravity CLI (agy)"
+else
+  echo ""
+  echo "------------------------------------------------------------------"
+  echo " Missing dependency: Google Antigravity (agy)"
+  echo ""
+  echo " agy renders this statusline and supplies the quota data it shows."
+  echo " Without it the script is installed but never runs."
+  echo ""
+  echo " Download Antigravity: ${ANTIGRAVITY_URL}"
+  echo "------------------------------------------------------------------"
+  if [ -t 0 ] && [ "${AUTO_CONFIRM}" = false ]; then
+    read -r -p " Install anyway (ready for when agy is installed)? [y/N]: " CONTINUE_NO_AGY
+    case "${CONTINUE_NO_AGY}" in
+      [Yy]*) echo "==> Continuing without agy." ;;
+      *)
+        echo "==> Aborted. Install Antigravity first, then re-run this installer."
+        exit 1
+        ;;
+    esac
+  else
+    echo "==> Continuing without agy (non-interactive). Install Antigravity to activate the statusline."
+  fi
+  echo ""
+fi
+
 mkdir -p "${TARGET_DIR}"
 cp "${REPO_DIR}/statusline.py" "${TARGET_FILE}"
 chmod +x "${TARGET_FILE}"
@@ -117,6 +160,22 @@ TEST_PAYLOAD='{"context_window":{"used_percentage":28.0},"quota":{"gemini-5h":{"
 OUTPUT=$(printf '%s' "${TEST_PAYLOAD}" | python3 "${TARGET_FILE}")
 echo "==> Preview:"
 echo "${OUTPUT}"
+# The "Auto: N left" segment reads the classifier's usage ledger. It is optional,
+# but silently omitting the segment reads as a bug, so say why it is not there.
+if [ ! -f "${HOME}/.gemini/config/classifier_usage.json" ] \
+   && [ ! -d "${HOME}/.gemini/config/plugins/agy-auto-mode" ]; then
+  echo ""
+  echo "------------------------------------------------------------------"
+  echo " Optional: agy-auto-mode is not installed."
+  echo ""
+  echo " The statusline works without it, but the 'Auto: N left' segment"
+  echo " (remaining daily auto-mode classifier requests) will be hidden,"
+  echo " because there is no classifier usage ledger to read."
+  echo ""
+  echo " Get it here: ${AUTO_MODE_URL}"
+  echo "------------------------------------------------------------------"
+fi
+
 echo ""
 echo "==> Antigravity Statusline installed successfully!"
 echo "    Start or restart 'agy' to see your new statusline."

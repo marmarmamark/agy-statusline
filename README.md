@@ -1,12 +1,26 @@
 # agy-statusline 📊
 
+[![tests](https://github.com/marmarmamark/agy-statusline/actions/workflows/test.yml/badge.svg)](https://github.com/marmarmamark/agy-statusline/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-brightgreen.svg)](https://www.python.org/)
+[![Python: 3.9+](https://img.shields.io/badge/Python-3.9+-brightgreen.svg)](https://www.python.org/)
 [![Platform: Antigravity](https://img.shields.io/badge/Antigravity-CLI-orange.svg)](https://github.com/google-deepmind)
 
 A Claude Code-style interactive statusline for the [Google Antigravity](https://github.com/google-deepmind) CLI (`agy`).
 
 Display your context window bar, 5-hour rolling session limit, weekly quota, and Auto-Mode classifier capacity in real time directly within your terminal.
+
+---
+
+## Requirements
+
+| Dependency | Required? | Why | Get it |
+| :--- | :--- | :--- | :--- |
+| **Google Antigravity (`agy`)** | **Required** | `agy` is what renders the statusline and supplies the context and quota data it displays. Without it the script installs but never runs. | [antigravity.google](https://antigravity.google/) |
+| **Python 3.9+** | **Required** | The statusline is a single stdlib-only script. | [python.org](https://www.python.org/) |
+| **[`agy-auto-mode`](https://github.com/marmarmamark/agy-auto-mode)** | Optional | Supplies the classifier usage ledger behind the `Auto: N left` segment. Without it that one segment is hidden; everything else works. | [marmarmamark/agy-auto-mode](https://github.com/marmarmamark/agy-auto-mode) |
+
+`install.sh` checks for each of these and tells you what to download if something
+is missing, rather than installing a statusline that quietly never appears.
 
 ---
 
@@ -71,7 +85,7 @@ Clone https://github.com/marmarmamark/agy-statusline.git and run bash install.sh
    bash install.sh
    ```
 
-3. The installer copies the script to `~/.gemini/config/scripts/statusline.py` and registers it in `~/.gemini/config/settings.json`:
+3. The installer copies the script to `~/.gemini/config/scripts/statusline.py` and registers it in the settings file `agy` actually reads, `~/.gemini/antigravity-cli/settings.json` (falling back to `~/.gemini/config/settings.json` only if the `antigravity-cli` directory does not exist). Existing `statusLine` keys are merged, not overwritten:
    ```json
    {
      "statusLine": {
@@ -90,14 +104,13 @@ Clone https://github.com/marmarmamark/agy-statusline.git and run bash install.sh
 Run the automated test suite:
 
 ```bash
-python3 tests/test_statusline.py
+python3 -m unittest discover -s tests -v
 ```
 
 Expected output:
 ```text
-.......
 ----------------------------------------------------------------------
-Ran 7 tests in 0.001s
+Ran 15 tests in 0.2s
 
 OK
 ```
@@ -111,6 +124,20 @@ To remove the statusline and restore default settings:
 ```bash
 bash install.sh --uninstall
 ```
+
+---
+
+## Related Tools
+
+`agy-statusline` is one of four independent tools for Antigravity. Each works on
+its own; installed together they share quota state through
+`/tmp/agy_statusline_cache.json`.
+
+| Tool | What it does |
+| :--- | :--- |
+| [**agy-auto-mode**](https://github.com/marmarmamark/agy-auto-mode) | Security classifier that removes routine permission prompts. Supplies this statusline's `Auto:` segment. |
+| [**agy-auto-resume**](https://github.com/marmarmamark/agy-auto-resume) | Waits out a 100% 5-hour quota and resumes the session automatically. |
+| [**gemini-worker**](https://github.com/marmarmamark/gemini-worker) | Delegates grunt work from Claude Code to `agy`. |
 
 ---
 
