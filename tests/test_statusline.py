@@ -322,15 +322,21 @@ class TestLiveWindowFreshness(unittest.TestCase):
 
     def test_nested_render_never_spawns_a_sync(self):
         """A nested render belongs to a sync already in flight."""
-        cooldown = "/tmp/agy_quota_sync_cooldown"
-        if os.path.exists(cooldown):
-            os.remove(cooldown)
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
+            cooldown = tf.name
+        saved_cooldown = sl.COOLDOWN_FILE
+        sl.COOLDOWN_FILE = cooldown
         os.environ["STATUSLINE_NO_RECURSE"] = "1"
         try:
+            if os.path.exists(cooldown):
+                os.remove(cooldown)
             sl.trigger_background_quota_sync(20)
             self.assertFalse(os.path.exists(cooldown))
         finally:
+            sl.COOLDOWN_FILE = saved_cooldown
             os.environ.pop("STATUSLINE_NO_RECURSE", None)
+            if os.path.exists(cooldown):
+                os.remove(cooldown)
 
 
 if __name__ == "__main__":

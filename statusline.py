@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 # Overridable so a self-test or a harness can render a sample payload without
 # writing it over the real quota cache that agy-auto-resume and gemini-worker read.
 CACHE_FILE = os.environ.get("STATUSLINE_CACHE_PATH") or "/tmp/agy_statusline_cache.json"
+COOLDOWN_FILE = os.environ.get("STATUSLINE_COOLDOWN_PATH") or "/tmp/agy_quota_sync_cooldown"
 CLASSIFIER_USAGE_FILE = os.path.expanduser("~/.gemini/config/classifier_usage.json")
 DEFAULT_CLASSIFIER_LIMIT = 1500
 
@@ -116,7 +117,7 @@ def trigger_background_quota_sync(min_interval=SYNC_INTERVAL_SECS):
     # accident of timing.
     if is_nested_render():
         return
-    cooldown_file = "/tmp/agy_quota_sync_cooldown"
+    cooldown_file = COOLDOWN_FILE
     now = time.time()
     if os.path.exists(cooldown_file):
         try:
